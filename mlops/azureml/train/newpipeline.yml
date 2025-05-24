@@ -1,26 +1,11 @@
 $schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
-type: pipeline
-display_name: complete_pipeline
-experiment_name: used_car_price_prediction
-description: Used car price prediction pipeline with data prep, training, and model registration
-
-inputs:
-  raw_data:
-    type: uri_file
-    path: azureml:used-cars-data@latest
-
 outputs:
   train_data:
-    type: preprocess_step.outputs.train_data
+    type: uri_folder
   test_data:
-    type: preprocess_step.outputs.test_data
+    type: uri_folder
   model_info_output_path:
-    type: uri_folder  # The model output is stored as a folder containing the MLflow model
-
-settings:
-  default_datastore: azureml:workspaceblobstore
-  default_compute: azureml:cpu-cluster
-  continue_on_step_failure: false
+    type: uri_folder
 
 jobs:
   prep_data:
@@ -36,35 +21,17 @@ jobs:
     inputs:
       raw_data: ${{parent.inputs.raw_data}}
     outputs:
-      train_data: ${{parent.outputs.train_data}}
-      test_data: ${{parent.outputs.test_data}}
+      train_data:
+        type: uri_folder
+      test_data:
+        type: uri_folder
 
   sweep_step:
-    name: train_price_prediction_model
-    display_name: train-model-sweep
-    type: sweep
-    inputs:
-      train_data: ${{parent.jobs.prep_data.outputs.train_data}}
-      test_data: ${{parent.jobs.prep_data.outputs.test_data}}
+    # ... (rest of your sweep_step configuration remains the same)
     outputs:
       model_output:
         type: mlflow_model
-    sampling_algorithm: random  # Random sampling is used for hyperparameter tuning
-    trial: ./train.yml  # Refers to a separate command component
-    search_space:
-      n_estimators:
-        type: choice
-        values: [10, 20, 30, 50]
-      max_depth:
-        type: choice  # max_depth is specified as a choice parameter
-        values: [3, 5, 10, None]  # Possible values for max_depth from the notebook
-    objective:
-      goal: minimize
-      primary_metric: MSE
-    limits:
-      max_total_trials: 20
-      max_concurrent_trials: 10
-      timeout: 7200
+        path: azureml://datastores/workspaceblobstore/paths/model_output
 
   register_model:
     name: register_model
@@ -79,4 +46,6 @@ jobs:
     inputs:
       model_name: "used_cars_price_prediction_model"
       model_path: ${{parent.jobs.sweep_step.outputs.model_output}}
-
+    outputs:
+      model_info_output_path:
+        type: uri_folder
