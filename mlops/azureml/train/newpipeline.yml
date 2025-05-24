@@ -1,22 +1,26 @@
 $schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
-outputs:
-  train_data:
-    type: uri_folder
-  test_data:
-    type: uri_folder
-  model_info_output_path:
-    type: uri_folder
+type: pipeline
+display_name: complete_pipeline
+experiment_name: used_car_price_prediction
+description: Used car price prediction pipeline with data prep, training, and model registration
+
+inputs:
+  raw_data:
+    type: uri_file
+    path: azureml:used-cars-data@latest
+
+settings:
+  default_datastore: azureml:workspaceblobstore
+  default_compute: azureml:cpu-cluster
+  continue_on_step_failure: false
 
 jobs:
   prep_data:
+    type: command
     name: data_preparation
     display_name: data-preparation-job
     code: ../../../data-science/src
-    command: >-
-      python prep.py  
-      --raw_data ${{inputs.raw_data}} 
-      --train_data ${{outputs.train_data}}
-      --test_data ${{outputs.test_data}} 
+    command: python prep.py --raw_data ${{inputs.raw_data}} --train_data ${{outputs.train_data}} --test_data ${{outputs.test_data}}
     environment: azureml:used-cars-train-env@latest
     inputs:
       raw_data: ${{parent.inputs.raw_data}}
@@ -27,24 +31,41 @@ jobs:
         type: uri_folder
 
   sweep_step:
-    # ... (rest of your sweep_step configuration remains the same)
+    type: sweep
+    name: train_price_prediction_model
+    display_name: train-model-sweep
+    inputs:
+      train_data: ${{parent.jobs.prep_data.outputs.train_data}}
+      test_data: ${{parent.jobs.prep_data.outputs.test_data}}
     outputs:
       model_output:
         type: mlflow_model
-        path: azureml://datastores/workspaceblobstore/paths/model_output
+    sampling_algorithm: random
+    trial: ./train.yml
+    search_space:
+      n_estimators:
+        type: choice
+        values: [10, 20, 30, 50]
+      max_depth:
+        type: choice
+        values: [3, 5, 10, None]
+    objective:
+      goal: minimize
+      primary_metric: MSE
+    limits:
+      max_total_trials: 20
+      max_concurrent_trials: 10
+      timeout: 7200
 
   register_model:
+    type: command
     name: register_model
     display_name: register-model-job
     code: ../../../data-science/src
-    command: >-
-      python register.py 
-      --model_name ${{inputs.model_name}} 
-      --model_path ${{inputs.model_path}} 
-      --model_info_output_path ${{outputs.model_info_output_path}}
+    command: python register.py --model_name ${{inputs.model_name}} --model_path ${{inputs.model_path}} --model_info_output_path ${{outputs.model_info_output_path}}
     environment: azureml:used-cars-train-env@latest
     inputs:
-      model_name: "used_cars_price_prediction_model"
+      model_name: used_cars_price_prediction_model
       model_path: ${{parent.jobs.sweep_step.outputs.model_output}}
     outputs:
       model_info_output_path:
