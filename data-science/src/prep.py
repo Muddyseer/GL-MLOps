@@ -1,44 +1,70 @@
-import os
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+"""
+Prepares raw data and provides training and test datasets.
+"""
+
 import argparse
+from pathlib import Path
+import os
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
 import mlflow
 
-def main():
-    """Main function of the script."""
+def parse_args():
+    '''Parse input arguments'''
 
-    # input and output arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input_data", type=str, help="path to input data")
-    parser.add_argument("--test_train_ratio", type=float, required=False, default=0.25)
-    parser.add_argument("--train_data", type=str, help="path to train data")
-    parser.add_argument("--test_data", type=str, help="path to test data")
+    parser = argparse.argparse.ArgumentParser("prep")  # Create an ArgumentParser object
+    parser.add_argument("--raw_data", type=str, help="Path to raw data")  # Specify the type for raw data (str)
+    parser.add_argument("--train_data", type=str, help="Path to train dataset")  # Specify the type for train data (str)
+    parser.add_argument("--test_data", type=str, help="Path to test dataset")  # Specify the type for test data (str)
+    parser.add_argument("--test_train_ratio", type=float, default=0.2, help="Test-train ratio")  # Specify the type (float) and default value (0.2) for test-train ratio
     args = parser.parse_args()
 
-    # Start Logging
-    mlflow.start_run()
+    return args
 
-    print(" ".join(f"{k}={v}" for k, v in vars(args).items()))
+def main(args):  # Write the function name for the main data preparation logic
+    '''Read, preprocess, split, and save datasets'''
 
-    print("Reading data")
-    df = pd.read_csv(args.input_data)
+    # Reading Data
+    df = pd.read_csv(args.raw_data)
 
-    # Convert Segment to numerical (0 for non-luxury, 1 for luxury)
-    df['Segment'] = df['Segment'].apply(lambda x: 1 if 'luxury' in x.lower() else 0)
+    # ------- WRITE YOUR CODE HERE -------
 
-    # Split data
-    train_df, test_df = train_test_split(
-        df,
-        test_size=args.test_train_ratio,
-        random_state=42
-    )
-
-    # Output paths are mounted as folder, hence we add filename to the path
+    # Step 1: Perform label encoding to convert categorical features into numerical values for model compatibility.
+    le = LabelEncoder()
+    df['Segment'] = le.fit_transform(df['Segment'])
+    
+    # Step 2: Split the dataset into training and testing sets using train_test_split with specified test size and random state.
+    train_df, test_df = train_test_split(df, test_size=args.test_train_ratio, random_state=42)
+    
+    # Step 3: Save the training and testing datasets as CSV files in separate directories for easier access and organization.
+    os.makedirs(args.train_data, exist_ok=True)
+    os.makedirs(args.test_data, exist_ok=True)
     train_df.to_csv(os.path.join(args.train_data, "train_data.csv"), index=False)
     test_df.to_csv(os.path.join(args.test_data, "test_data.csv"), index=False)
 
-    # Stop Logging
-    mlflow.end_run()
+    # Step 4: Log the number of rows in the training and testing datasets as metrics for tracking and evaluation.  
+    mlflow.log_metric('train size', train_df.shape[0])
+    mlflow.log_metric('test size', test_df.shape[0])
 
 if __name__ == "__main__":
-    main()
+    mlflow.start_run()
+
+    # Parse Arguments
+    args = parse_args()  # Call the function to parse arguments
+
+    lines = [
+        f"Raw data path: {args.raw_data}",  # Print the raw_data path
+        f"Train dataset output path: {args.train_data}",  # Print the train_data path
+        f"Test dataset path: {args.test_data}",  # Print the test_data path
+        f"Test-train ratio: {args.test_train_ratio}",  # Print the test_train_ratio
+    ]
+
+    for line in lines:
+        print(line)
+    
+    main(args)
+
+    mlflow.end_run()
