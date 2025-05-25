@@ -15,7 +15,7 @@ import mlflow
 def parse_args():
     '''Parse input arguments'''
 
-    parser = argparse.argparse.ArgumentParser("prep")  # Create an ArgumentParser object
+    parser = argparse.ArgumentParser("prep")  # Create an ArgumentParser object
     parser.add_argument("--raw_data", type=str, help="Path to raw data")  # Specify the type for raw data (str)
     parser.add_argument("--train_data", type=str, help="Path to train dataset")  # Specify the type for train data (str)
     parser.add_argument("--test_data", type=str, help="Path to test dataset")  # Specify the type for test data (str)
