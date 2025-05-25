@@ -1,21 +1,21 @@
 $schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
-type: command
+type: command  # This is correct for trial definitions
 name: train_model
 display_name: train_model
-inputs:
+inputs: 
   train_data:
-    type: uri_folder  # From the notebook's train_step definition (Input(type="uri_folder"))
+    type: uri_folder  # Specify the type for train_data
   test_data:
-    type: uri_folder  # From the notebook's train_step definition (Input(type="uri_folder"))
+    type: uri_folder  # Specify the type for test_data
   n_estimators:
-    type: integer
-    default: 100  # Matches the notebook's default value
+    type: integer  
+    default: 100 
   max_depth:
-    type: integer  # From the notebook's Input(type="number") for max_depth
-    default: None  # Matches the notebook's default value (None)
+    type: integer  # Specify the type for max_depth
+    default: 5  # Provide the default value for max_depth
 outputs:
   model_output:
-    type: mlflow_model  # From the notebook's model registration and Output(type="uri_folder") for MLflow model
+    type: mlflow_model  # Specify the type for model_output
 code: ../../../data-science/src
 command: >-
   python train.py 
