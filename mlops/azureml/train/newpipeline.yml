@@ -26,7 +26,7 @@ jobs:
   prep_data:
     name: data_preparation  # Provide the job name
     display_name: prep-data  # Provide the display name for the job
-    code: ./data-science/src
+    code: ./src
     command: >-
       python prep.py  
       --raw_data ${{inputs.raw_data}} 
