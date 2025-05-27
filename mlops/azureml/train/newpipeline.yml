@@ -1,26 +1,37 @@
-name: Trigger Azure ML Pipeline
+name: Azure ML Pipeline with Validation
 on: [push, workflow_dispatch]
 
+env:
+  DATA_PATH: "azureml:used-cars-data@latest"
+  MODEL_NAME: "used_cars_price_model"
+  VALIDATION_THRESHOLD: "0.85"  # Minimum R2 score to register model
+
 jobs:
-  trigger-pipeline:
+  execute_pipeline:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Login to Azure
+      - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Trigger Azure ML Pipeline
+      - name: Setup Environment
         run: |
           pip install azure-ai-ml
+          az extension add -n ml --yes
+
+      - name: Run Validated Pipeline
+        run: |
           python - <<EOF
           from azure.ai.ml import MLClient, Input
           from azure.identity import DefaultAzureCredential
+          from azure.ai.ml.sweep import Choice
+          from azure.ai.ml.dsl import pipeline
 
-          # Initialize MLClient
+          # Connect to workspace
           ml_client = MLClient(
               DefaultAzureCredential(),
               subscription_id="${{ secrets.AZURE_SUBSCRIPTION_ID }}",
@@ -28,29 +39,54 @@ jobs:
               workspace_name="${{ secrets.AZURE_WORKSPACE }}",
           )
 
-          # Define pipeline (replace with your actual components)
-          @pipeline(compute="cpu-cluster")
-          def car_price_pipeline(input_data):
-              preprocess = ml_client.components.get("step_process")(data=input_data)
+          @pipeline()
+          def validated_pipeline():
+              # ===== DATA VALIDATION =====
+              validate_data = ml_client.components.get("validate_data")(
+                  raw_data=Input(path="${{ env.DATA_PATH }}")
+              )
+
+              # ===== DATA PREP =====
+              prep = ml_client.components.get("step_process")(
+                  data=validate_data.outputs.valid_data,
+                  test_train_ratio=0.8
+              )
+
+              # ===== TRAINING WITH SWEEP =====
               train = ml_client.components.get("train_step")(
-                  train_data=preprocess.outputs.train_data,
-                  test_data=preprocess.outputs.test_data,
-                  n_estimators=50,  # Default value (sweep will override)
-                  max_depth=10      # Default value (sweep will override)
+                  train_data=prep.outputs.train_data,
+                  test_data=prep.outputs.test_data,
+                  n_estimators=Choice(values=[10, 20, 30, 50]),
+                  max_depth=Choice(values=[3, 5, 10, None])
               )
-              sweep = train.sweep(
-                  primary_metric="MSE",
-                  goal="Minimize",
-                  sampling_algorithm="random",
+              sweep_job = train.sweep(
                   compute="cpu-cluster",
+                  sampling_algorithm="random",
+                  primary_metric="MSE",
+                  goal="Minimize"
               )
-              sweep.set_limits(max_total_trials=20, max_concurrent_trials=10, timeout=7200)
-              return {"model": sweep.outputs.model_output}
+              sweep_job.set_limits(max_total_trials=20, max_concurrent_trials=10)
+
+              # ===== MODEL VALIDATION =====
+              validate_model = ml_client.components.get("validate_model")(
+                  model=sweep_job.outputs.model_output,
+                  test_data=prep.outputs.test_data,
+                  threshold=${{ env.VALIDATION_THRESHOLD }}
+              )
+
+              # ===== CONDITIONAL REGISTRATION =====
+              register = ml_client.components.get("register_model")(
+                  model_input=validate_model.outputs.validated_model,
+                  model_name="${{ env.MODEL_NAME }}"
+              )
+
+              return {
+                  "validation_report": validate_model.outputs.validation_report,
+                  "registered_model": register.outputs.registered_model
+              }
 
           # Submit pipeline
-          pipeline_job = car_price_pipeline(
-              input_data=Input(path="${{ secrets.AZURE_DATA_PATH }}")  # Set this secret to your data URI
-          )
+          pipeline_job = validated_pipeline()
           ml_client.jobs.create_or_update(pipeline_job)
-          print(f"Pipeline triggered! Job ID: {pipeline_job.name}")
+          print(f"Pipeline submitted with ID: {pipeline_job.name}")
           EOF
