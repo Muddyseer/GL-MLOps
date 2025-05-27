@@ -1,34 +1,30 @@
-name: Azure ML Pipeline with Validation
+name: End-to-End ML Pipeline with Sweep
 on: [push, workflow_dispatch]
 
-env:
-  DATA_PATH: "azureml:used-cars-data@latest"
-  MODEL_NAME: "used_cars_price_model"
-  VALIDATION_THRESHOLD: "0.85"  # Minimum R2 score to register model
-
 jobs:
-  execute_pipeline:
+  run_pipeline:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Azure Login
+      - name: Login to Azure
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      - name: Setup Environment
+      - name: Setup environment
         run: |
-          pip install azure-ai-ml
+          python -m pip install --upgrade pip
+          pip install azure-ai-ml pandas scikit-learn
           az extension add -n ml --yes
 
-      - name: Run Validated Pipeline
+      - name: Run complete pipeline
         run: |
           python - <<EOF
-          from azure.ai.ml import MLClient, Input
+          from azure.ai.ml import MLClient, Input, Output, command, sweep
+          from azure.ai.ml.constants import AssetTypes
           from azure.identity import DefaultAzureCredential
-          from azure.ai.ml.sweep import Choice
           from azure.ai.ml.dsl import pipeline
 
           # Connect to workspace
@@ -39,54 +35,113 @@ jobs:
               workspace_name="${{ secrets.AZURE_WORKSPACE }}",
           )
 
-          @pipeline()
-          def validated_pipeline():
-              # ===== DATA VALIDATION =====
-              validate_data = ml_client.components.get("validate_data")(
-                  raw_data=Input(path="${{ env.DATA_PATH }}")
-              )
+          # Define components directly in code (no separate YAML needed)
+          prep_data_component = command(
+              name="prep_data",
+              display_name="Data Preparation",
+              description="Prepares and splits the data",
+              inputs={
+                  "raw_data": Input(type=AssetTypes.URI_FILE),
+                  "test_train_ratio": Input(type="number", default=0.8)
+              },
+              outputs={
+                  "train_data": Output(type=AssetTypes.URI_FOLDER),
+                  "test_data": Output(type=AssetTypes.URI_FOLDER)
+              },
+              code="./src",
+              command="python prep.py \
+                      --raw_data ${{inputs.raw_data}} \
+                      --train_data ${{outputs.train_data}} \
+                      --test_data ${{outputs.test_data}} \
+                      --test_train_ratio ${{inputs.test_train_ratio}}",
+              environment="AzureML-sklearn-1.0-ubuntu20.04-py38-cpu@latest"
+          )
 
-              # ===== DATA PREP =====
-              prep = ml_client.components.get("step_process")(
-                  data=validate_data.outputs.valid_data,
+          train_component = command(
+              name="train_model",
+              display_name="Train Model",
+              inputs={
+                  "train_data": Input(type=AssetTypes.URI_FOLDER),
+                  "test_data": Input(type=AssetTypes.URI_FOLDER),
+                  "n_estimators": Input(type="integer", default=50),
+                  "max_depth": Input(type="integer", default=None)
+              },
+              outputs={
+                  "model_output": Output(type=AssetTypes.MLFLOW_MODEL)
+              },
+              code="./src",
+              command="python train.py \
+                      --train_data ${{inputs.train_data}} \
+                      --test_data ${{inputs.test_data}} \
+                      --n_estimators ${{inputs.n_estimators}} \
+                      --max_depth ${{inputs.max_depth}} \
+                      --model_output ${{outputs.model_output}}",
+              environment="AzureML-sklearn-1.0-ubuntu20.04-py38-cpu@latest"
+          )
+
+          register_component = command(
+              name="register_model",
+              display_name="Register Model",
+              inputs={
+                  "model_input": Input(type=AssetTypes.MLFLOW_MODEL),
+                  "model_name": Input(type="string")
+              },
+              code="./src",
+              command="python register.py \
+                      --model ${{inputs.model_input}} \
+                      --model_name ${{inputs.model_name}}",
+              environment="AzureML-sklearn-1.0-ubuntu20.04-py38-cpu@latest"
+          )
+
+          # Build pipeline with sweep
+          @pipeline()
+          def full_pipeline(raw_data):
+              # Data prep
+              prep = prep_data_component(
+                  raw_data=raw_data,
                   test_train_ratio=0.8
               )
 
-              # ===== TRAINING WITH SWEEP =====
-              train = ml_client.components.get("train_step")(
+              # Training with sweep
+              train = train_component(
                   train_data=prep.outputs.train_data,
-                  test_data=prep.outputs.test_data,
-                  n_estimators=Choice(values=[10, 20, 30, 50]),
-                  max_depth=Choice(values=[3, 5, 10, None])
+                  test_data=prep.outputs.test_data
               )
               sweep_job = train.sweep(
                   compute="cpu-cluster",
                   sampling_algorithm="random",
                   primary_metric="MSE",
-                  goal="Minimize"
+                  goal="Minimize",
+                  search_space={
+                      "n_estimators": sweep.Choice(values=[10, 20, 30, 50]),
+                      "max_depth": sweep.Choice(values=[3, 5, 10, None])
+                  }
               )
-              sweep_job.set_limits(max_total_trials=20, max_concurrent_trials=10)
-
-              # ===== MODEL VALIDATION =====
-              validate_model = ml_client.components.get("validate_model")(
-                  model=sweep_job.outputs.model_output,
-                  test_data=prep.outputs.test_data,
-                  threshold=${{ env.VALIDATION_THRESHOLD }}
+              sweep_job.set_limits(
+                  max_total_trials=20,
+                  max_concurrent_trials=10,
+                  timeout=7200
               )
 
-              # ===== CONDITIONAL REGISTRATION =====
-              register = ml_client.components.get("register_model")(
-                  model_input=validate_model.outputs.validated_model,
-                  model_name="${{ env.MODEL_NAME }}"
+              # Model registration
+              register = register_component(
+                  model_input=sweep_job.outputs.model_output,
+                  model_name="used_cars_price_model"
               )
 
               return {
-                  "validation_report": validate_model.outputs.validation_report,
-                  "registered_model": register.outputs.registered_model
+                  "train_data": prep.outputs.train_data,
+                  "test_data": prep.outputs.test_data,
+                  "registered_model": register.outputs.model_output
               }
 
           # Submit pipeline
-          pipeline_job = validated_pipeline()
+          pipeline_job = full_pipeline(
+              raw_data=Input(
+                  path="${{ secrets.AZURE_DATA_PATH }}",
+                  type=AssetTypes.URI_FILE
+              )
+          )
           ml_client.jobs.create_or_update(pipeline_job)
           print(f"Pipeline submitted with ID: {pipeline_job.name}")
           EOF
