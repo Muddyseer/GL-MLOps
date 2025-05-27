@@ -38,6 +38,7 @@ jobs:
     outputs:
       train_data: ${{parent.outputs.train_data}}
       test_data: ${{parent.outputs.test_data}}
+      || echo "Data preparation failed"
 
   sweep_step:
     name: model_training_sweep
