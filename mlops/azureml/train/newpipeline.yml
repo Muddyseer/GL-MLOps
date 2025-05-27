@@ -1,84 +1,56 @@
-$schema: https://azuremlschemas.azureedge.net/latest/pipelineJob.schema.json
-type: pipeline
-display_name: complete-pipeline  # Provide the display name for the pipeline
-experiment_name: used_car_price_prediction  # Provide the experiment name
-description: used-cars-price-prediction-pipeline  # Provide the description for the pipeline
-
-inputs:
-  raw_data:
-    type: uri_file
-    path: azureml:used-cars-data@latest
-
-outputs:
-  train_data:
-    type: uri_folder  # Specify the type for train_data output
-  test_data:
-    type: uri_folder  # Specify the type for test_data output
-  model_info_output_path:
-    type: uri_folder  # Specify the type for model_info_output_path output
-
-settings:
-  default_datastore: azureml:workspaceblobstore
-  default_compute: azureml:cpu-cluster
-  continue_on_step_failure: false
+name: Trigger Azure ML Pipeline
+on: [push, workflow_dispatch]
 
 jobs:
-  prep_data:
-    name: data_preparation  # Provide the job name
-    display_name: prep-data  # Provide the display name for the job
-    code: ../../../data-science/src
-    command: >-
-      python prep.py  
-      --raw_data ${{inputs.raw_data}} 
-      --train_data ${{outputs.train_data}}
-      --test_data ${{outputs.test_data}} 
-    environment: azureml:used-cars-train-env@latest
-    inputs:
-      raw_data: ${{parent.inputs.raw_data}}
-    outputs:
-      train_data: ${{parent.outputs.train_data}}
-      test_data: ${{parent.outputs.test_data}}
+  trigger-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-  sweep_step:
-    name: model_training_sweep
-    display_name: train-model-sweep  # Hint: Provide the display name for the job
-    type: sweep
-    inputs:
-      train_data: ${{parent.jobs.prep_data.outputs.train_data}}
-      test_data: ${{parent.jobs.prep_data.outputs.test_data}}
-    outputs:
-      model_output:
-        type: mlflow_model
-    sampling_algorithm: random  # Specify the sampling algorithm
-    trial: ./train.yml  # Refers to a separate command component
-    search_space:
-      n_estimators:
-        type: choice
-        values: [10, 20, 30, 50]
-      max_depth:
-        type: choice  # Specify the type for max_depth
-        values: [3, 5, 10]  # Provide the values for max_depth
-    objective:
-      goal: minimize
-      primary_metric: MSE
-    limits:
-      max_total_trials: 20
-      max_concurrent_trials: 10
-      timeout: 7200
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      - name: Trigger Azure ML Pipeline
+        run: |
+          pip install azure-ai-ml
+          python - <<EOF
+          from azure.ai.ml import MLClient, Input
+          from azure.identity import DefaultAzureCredential
 
-  register_model:
-    name: register_model  # Provide the job name
-    display_name: register-model  # Provide the display name for the job
-    code: ../../../data-science/src
-    command: >-
-      python register.py 
-      --model_name ${{inputs.model_name}} 
-      --model_path ${{inputs.model_path}} 
-      --model_info_output_path ${{outputs.model_info_output_path}}
-    environment: azureml:used-cars-train-env@latest
-    inputs:
-      model_name: "used_cars_price_prediction_model"
-      model_path: ${{parent.jobs.sweep_step.outputs.model_output}}
-    outputs:
-      model_info_output_path: ${{parent.outputs.model_info_output_path}}
+          # Initialize MLClient
+          ml_client = MLClient(
+              DefaultAzureCredential(),
+              subscription_id="${{ secrets.AZURE_SUBSCRIPTION_ID }}",
+              resource_group_name="${{ secrets.AZURE_RESOURCE_GROUP }}",
+              workspace_name="${{ secrets.AZURE_WORKSPACE }}",
+          )
+
+          # Define pipeline (replace with your actual components)
+          @pipeline(compute="cpu-cluster")
+          def car_price_pipeline(input_data):
+              preprocess = ml_client.components.get("step_process")(data=input_data)
+              train = ml_client.components.get("train_step")(
+                  train_data=preprocess.outputs.train_data,
+                  test_data=preprocess.outputs.test_data,
+                  n_estimators=50,  # Default value (sweep will override)
+                  max_depth=10      # Default value (sweep will override)
+              )
+              sweep = train.sweep(
+                  primary_metric="MSE",
+                  goal="Minimize",
+                  sampling_algorithm="random",
+                  compute="cpu-cluster",
+              )
+              sweep.set_limits(max_total_trials=20, max_concurrent_trials=10, timeout=7200)
+              return {"model": sweep.outputs.model_output}
+
+          # Submit pipeline
+          pipeline_job = car_price_pipeline(
+              input_data=Input(path="${{ secrets.AZURE_DATA_PATH }}")  # Set this secret to your data URI
+          )
+          ml_client.jobs.create_or_update(pipeline_job)
+          print(f"Pipeline triggered! Job ID: {pipeline_job.name}")
+          EOF
