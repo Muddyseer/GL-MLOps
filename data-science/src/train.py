@@ -15,7 +15,7 @@ import mlflow.sklearn
 def parse_args():
     '''Parse input arguments'''
 
-    parser = argparse.ArgumentParser("train")
+    parser = argparse.ArgumentParser()
     
     # -------- WRITE YOUR CODE HERE --------
     
@@ -24,7 +24,7 @@ def parse_args():
     parser.add_argument("--test_data", type=str, help="Path to test dataset")
     parser.add_argument("--model_output", type=str, help="Path to save trained model")
     parser.add_argument("--n_estimators", type=int, default=100, help="Number of trees in the forest")
-    parser.add_argument("--max_depth", type=int, default=None, help="Maximum depth of the trees")
+    parser.add_argument("--max_depth", type=int, default=5, help="Maximum depth of the trees")
 
     args = parser.parse_args()
 
