@@ -3,7 +3,7 @@
 """
 Trains ML model using training dataset and evaluates using test dataset. Saves trained model.
 """
-
+import os
 import argparse
 from pathlib import Path
 import pandas as pd
@@ -14,50 +14,37 @@ import mlflow.sklearn
 
 def parse_args():
     '''Parse input arguments'''
-
     parser = argparse.ArgumentParser()
-    
-    # -------- WRITE YOUR CODE HERE --------
-    
-    # Step 1: Define arguments for train data, test data, model output, and RandomForest hyperparameters. Specify their types and defaults.  
-    parser.add_argument("--train_data", type=str, help="Path to train dataset")
-    parser.add_argument("--test_data", type=str, help="Path to test dataset")
-    parser.add_argument("--model_output", type=str, help="Path to save trained model")
+    parser.add_argument("--train_data", type=str, required=True, help="Path to train dataset")
+    parser.add_argument("--test_data", type=str, required=True, help="Path to test dataset")
+    parser.add_argument("--model_output", type=str, required=True, help="Path to save trained model")
     parser.add_argument("--n_estimators", type=int, default=100, help="Number of trees in the forest")
     parser.add_argument("--max_depth", type=int, default=5, help="Maximum depth of the trees")
-
-    args = parser.parse_args()
-
-    return args
+    return parser.parse_args()
 
 def select_first_file(path):
     """Selects first file in folder, use under assumption there is only one file in folder"""
     files = os.listdir(path)
+    assert len(files) == 1, f"Expected 1 file in {path}, found {len(files)}"
     return os.path.join(path, files[0])
 
 def main(args):
     '''Read train and test datasets, train model, evaluate model, save trained model'''
-
-    args = parser.parse_args()
-
-    return args
-
-def main(args):
-    '''Read train and test datasets, train model, evaluate model, save trained model'''
-
-    # -------- WRITE YOUR CODE HERE --------
-
-    # Step 2: Read the train and test datasets from the provided paths using pandas. Replace '_______' with appropriate file paths and methods.
+    # Load data
     train_df = pd.read_csv(select_first_file(args.train_data))
     test_df = pd.read_csv(select_first_file(args.test_data))
 
-    # Step 3: Split the data into features (X) and target (y) for both train and test datasets. Specify the target column name.
-    y_train = train_df['Price']  # Target column is 'Price'
-    X_train = train_df.drop(columns=['Price'])
-    y_test = test_df['Price']
-    X_test = test_df.drop(columns=['Price'])
+    # Validate target column
+    if "Price" not in train_df.columns:
+        raise ValueError("Target column 'Price' not found in training data")
 
-    # Step 4: Initialize the RandomForest Regressor with specified hyperparameters, and train the model using the training data.
+    # Split features/target
+    y_train = train_df["Price"]
+    X_train = train_df.drop(columns=["Price"])
+    y_test = test_df["Price"]
+    X_test = test_df.drop(columns=["Price"])
+
+    # Train model
     model = RandomForestRegressor(
         n_estimators=args.n_estimators,
         max_depth=args.max_depth,
@@ -65,40 +52,24 @@ def main(args):
     )
     model.fit(X_train, y_train)
 
-    # Step 5: Log model hyperparameters like 'n_estimators' and 'max_depth' for tracking purposes in MLflow.
-    mlflow.log_param("model", "RandomForestRegressor")
-    mlflow.log_param("n_estimators", args.n_estimators)
-    mlflow.log_param("max_depth", args.max_depth)
+    # Log parameters and metrics
+    mlflow.log_params({
+        "n_estimators": args.n_estimators,
+        "max_depth": args.max_depth
+    })
+    y_pred = model.predict(X_test)
+    mse = mean_squared_error(y_test, y_pred)
+    mlflow.log_metric("MSE", mse)
 
-    # Step 6: Predict target values on the test dataset using the trained model, and calculate the mean squared error.
-    yhat_test = model.predict(X_test)
-    mse = mean_squared_error(y_test, yhat_test)
-    print(f'Mean Squared Error: {mse:.2f}')
-
-    # Step 7: Log the MSE metric in MLflow for model evaluation, and save the trained model to the specified output path.
-    mlflow.log_metric("MSE", float(mse))
+    # Save model
     os.makedirs(args.model_output, exist_ok=True)
     mlflow.sklearn.save_model(model, args.model_output)
 
-
 if __name__ == "__main__":
-    
-    mlflow.start_run()
-
-    # Parse Arguments
-    args = parse_args()
-
-    lines = [
-        f"Train dataset input path: {args.train_data}",
-        f"Test dataset input path: {args.test_data}",
-        f"Model output path: {args.model_output}",
-        f"Number of Estimators: {args.n_estimators}",
-        f"Max Depth: {args.max_depth}"
-    ]
-
-    for line in lines:
-        print(line)
-
-    main(args)
-
-    mlflow.end_run()
+    with mlflow.start_run():
+        args = parse_args()
+        print(f"Train data path: {args.train_data}")
+        print(f"Test data path: {args.test_data}")
+        print(f"Model output path: {args.model_output}")
+        print(f"n_estimators: {args.n_estimators}, max_depth: {args.max_depth}")
+        main(args)
