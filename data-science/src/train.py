@@ -35,7 +35,7 @@ def main(args):
     test_df = pd.read_csv(select_first_file(args.test_data))
 
     # Validate target column
-    if "Price" not in train_df.columns:
+    if "price" not in train_df.columns:
         raise ValueError("Target column 'Price' not found in training data")
 
     # Split features/target
