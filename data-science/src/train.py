@@ -36,13 +36,13 @@ def main(args):
 
     # Validate target column
     if "price" not in train_df.columns:
-        raise ValueError("Target column 'Price' not found in training data")
+        raise ValueError("Target column 'price' not found in training data")
 
     # Split features/target
-    y_train = train_df["Price"]
-    X_train = train_df.drop(columns=["Price"])
-    y_test = test_df["Price"]
-    X_test = test_df.drop(columns=["Price"])
+    y_train = train_df["price"]
+    X_train = train_df.drop(columns=["price"])
+    y_test = test_df["price"]
+    X_test = test_df.drop(columns=["price"])
 
     # Train model
     model = RandomForestRegressor(
